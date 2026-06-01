@@ -12,6 +12,8 @@ from google.genai import types
 
 from kb_manager import KBManager
 from github_integration import GitHubIntegration
+from image_annotator import annotate_image
+from corrections_manager import CorrectionsManager
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +29,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 KB_URL = os.getenv("KB_URL")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "dor2500/FixyBot")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "fixyadmin123")  # Default password if none set
 
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment or .env file")
@@ -45,6 +48,12 @@ try:
     github_integration.fetch_repo_info()
 except Exception as e:
     logger.warning(f"Could not load GitHub repo info: {e}")
+
+# Initialize Corrections Manager
+corrections_manager = CorrectionsManager()
+
+# In-memory list of authorized admins
+admin_users = set()
 
 # Initialize Gemini Client
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -152,7 +161,15 @@ def get_system_prompt() -> str:
         "   לדוגמה: [SCRIPT_FILE:fix_network.bat] ... [/SCRIPT_FILE]\n"
         "   כך המערכת תייצר קובץ מוכן להורדה עבור המשתמש. בנוסף, הצג את הקוד גם כ-code block בתשובה הטקסטואלית.\n\n"
 
-        "12. פרויקט GitHub: אם המשתמש שואל על הפרויקט, קוד המקור, קבצים, מבנה הפרויקט, התקנה או תרומה לפרויקט — "
+        "12. סימון חזותי על תמונות (Visual Grounding): "
+        "כאשר משתמש שולח תמונה ושואל שאלה שדורשת מיקום פיזי (למשל: 'איפה ללחוץ?', 'מה הכפתור?', 'איזה כבל לנתק?'), "
+        "עליך למצוא את המיקום בתמונה ולהחזיר קואורדינטות בפורמט מדויק כדי שהמערכת תצייר מסגרת אדומה סביב האזור. "
+        "השתמש בתגית הבאה במקום כלשהו בתוך הטקסט שלך:\n"
+        "   [VISUAL_MARK:y_min,x_min,y_max,x_max:label]\n"
+        "הקואורדינטות צריכות להיות מספרים בין 0 ל-1000 (0,0 היא הפינה השמאלית העליונה, 1000,1000 היא הימנית התחתונה). label הוא הסבר קצר של מילה או שתיים. "
+        "דוגמה: 'הנה הכפתור שעליך ללחוץ: [VISUAL_MARK:200,800,250,900:כפתור הפעלה]'\n\n"
+
+        "13. פרויקט GitHub: אם המשתמש שואל על הפרויקט, קוד המקור, קבצים, מבנה הפרויקט, התקנה או תרומה לפרויקט — "
         "ענה על בסיס המידע הבא מה-GitHub repository:\n"
     )
 
@@ -169,13 +186,20 @@ def get_system_prompt() -> str:
         f"- מיקום גיאוגרפי משוער של המשתמש: {location_info['city']}, {location_info['country']}\n"
         f"- אזור זמן: {location_info['timezone']}\n"
         "---------------------------------------\n\n"
-        f"בסיס הידע הפנימי המלא:\n{kb_manager.kb_content}"
     )
+
+    # Add continuous learning corrections
+    corrections_context = corrections_manager.get_context_text()
+    if corrections_context:
+        prompt += f"{corrections_context}\n\n"
+
+    prompt += f"בסיס הידע הפנימי המלא:\n{kb_manager.kb_content}"
     return prompt
 
 # ─── Script extraction helpers ───
 
 SCRIPT_PATTERN = re.compile(r'\[SCRIPT_FILE:(.+?)\](.*?)\[/SCRIPT_FILE\]', re.DOTALL)
+VISUAL_MARK_PATTERN = re.compile(r'\[VISUAL_MARK:([\d\.]+),([\d\.]+),([\d\.]+),([\d\.]+):(.*?)\]')
 
 def extract_scripts(text: str):
     """Extract script blocks from bot response. Returns list of (filename, content) tuples."""
@@ -202,7 +226,6 @@ def build_reply_context(message) -> str:
     if not original_text:
         return ""
     
-    # Truncate very long original messages
     if len(original_text) > 500:
         original_text = original_text[:500] + "..."
     
@@ -241,7 +264,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/reload - טעינה מחדש של מאגר הידע מ-GitHub\n\n"
         "<b>מה אני יכול לעשות:</b>\n"
         "💬 מענה על שאלות טכניות בעברית\n"
-        "📸 ניתוח תמונות של שגיאות ותקלות\n"
+        "📸 ניתוח תמונות של שגיאות (כולל סימון מיקומים על התמונה)\n"
         "📜 יצירת סקריפטים מוכנים להורדה (.bat / .ps1 / .sh)\n"
         "🔍 מחקר שוק והשוואת מוצרי טכנולוגיה\n"
         "🔗 מידע על פרויקט FixyBot ב-GitHub\n\n"
@@ -263,6 +286,84 @@ async def reload_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ מאגר הידע עודכן בהצלחה!", parse_mode="HTML")
     else:
         await update.message.reply_text("❌ שגיאה בטעינת מאגר הידע. נשארנו עם הגרסה הקודמת.", parse_mode="HTML")
+
+# ─── Admin & Continuous Learning Handlers ───
+
+async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for admin login."""
+    if not context.args:
+        await update.message.reply_text("שימוש: /login <password>")
+        return
+    password = context.args[0]
+    if password == ADMIN_PASSWORD:
+        admin_users.add(update.effective_user.id)
+        await update.message.reply_text("✅ התחברת בהצלחה כמנהל מערכת!")
+    else:
+        await update.message.reply_text("❌ סיסמה שגויה.")
+
+async def correct_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Adds a correction to the continuous learning database."""
+    user_id = update.effective_user.id
+    if user_id not in admin_users:
+        await update.message.reply_text("❌ אינך מורשה לבצע פעולה זו. התחבר עם /login")
+        return
+
+    # Check if replied to a bot message
+    if not update.message.reply_to_message or update.message.reply_to_message.from_user.id != context.bot.id:
+        await update.message.reply_text("אנא בצע Reply לתשובה השגויה של הבוט והקלד /correct [התשובה הנכונה]")
+        return
+        
+    correct_answer = " ".join(context.args)
+    if not correct_answer:
+        await update.message.reply_text("אנא ספק את התשובה הנכונה: /correct [תשובה]")
+        return
+        
+    wrong_answer = update.message.reply_to_message.text or ""
+    
+    # Try to find the preceding question in chat_histories
+    question = "שאלה כללית (לא נמצאה בהיסטוריה)"
+    chat_id = update.effective_chat.id
+    if chat_id in chat_histories:
+        for i in range(len(chat_histories[chat_id]) - 1, -1, -1):
+            if chat_histories[chat_id][i].role == "user":
+                question = chat_histories[chat_id][i].parts[0].text
+                break
+                
+    correction = corrections_manager.add_correction(question, wrong_answer, correct_answer, user_id)
+    await update.message.reply_text(f"✅ התיקון נשמר בהצלחה (ID: {correction['id']}) ויתווסף לזיכרון הבוט.")
+
+async def list_corrections_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in admin_users:
+        await update.message.reply_text("❌ אינך מורשה לבצע פעולה זו.")
+        return
+    
+    corrections = corrections_manager.get_all_corrections()
+    if not corrections:
+        await update.message.reply_text("אין תיקונים במערכת.")
+        return
+        
+    text = "<b>רשימת התיקונים במערכת:</b>\n\n"
+    for c in corrections:
+        text += f"ID: <code>{c['id']}</code>\nשאלה: {c['question']}\nתשובה: {c['correct_answer']}\n---\n"
+    await update.message.reply_text(text, parse_mode="HTML")
+
+async def del_correction_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in admin_users:
+        return
+    
+    if not context.args:
+        await update.message.reply_text("שימוש: /del_correction <id>")
+        return
+        
+    cid = context.args[0]
+    if corrections_manager.delete_correction(cid):
+        await update.message.reply_text(f"✅ תיקון {cid} נמחק.")
+    else:
+        await update.message.reply_text(f"❌ לא נמצא תיקון עם ID {cid}.")
+
+# ─── General Message Handlers ───
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Processes user text messages, runs Gemini API, and replies by editing a temporary message."""
@@ -339,7 +440,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as telegram_html_error:
             logger.warning(f"Telegram HTML editing failed, falling back to plain text: {telegram_html_error}")
-            # Strip HTML tags and send as plain text
             clean_text = re.sub(r'<[^>]+>', '', display_text)
             await context.bot.edit_message_text(
                 chat_id=chat_id,
@@ -409,7 +509,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_context = build_reply_context(update.message)
             
         # Prepare parts: image part + user prompt
-        user_prompt = caption.strip() if caption.strip() else "אנא נתח את תמונת התקלה המצורפת וספק פתרון מפורט."
+        user_prompt = caption.strip() if caption.strip() else "אנא נתח את התמונה וספק פתרון. אם שאלתי על מיקום (למשל 'איפה ללחוץ'), אנא צרף את תגית VISUAL_MARK כפי שהוגדר לך."
         if reply_context:
             user_prompt = reply_context + user_prompt
 
@@ -456,9 +556,28 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(chat_histories[chat_id]) > 20:
             chat_histories[chat_id] = chat_histories[chat_id][-20:]
 
+        # --- Feature 1: Visual Grounding ---
+        visual_marks = VISUAL_MARK_PATTERN.findall(bot_response)
+        
+        if visual_marks:
+            annotated_bytes = image_bytes
+            for mark in visual_marks:
+                try:
+                    y_min, x_min, y_max, x_max = map(float, mark[:4])
+                    label = mark[4]
+                    annotated_bytes = annotate_image(annotated_bytes, [y_min, x_min, y_max, x_max], label)
+                except Exception as e:
+                    logger.error(f"Error drawing visual mark {mark}: {e}")
+            
+            # Send the annotated image
+            await context.bot.send_photo(chat_id=chat_id, photo=annotated_bytes, reply_to_message_id=update.message.message_id)
+
+        # Remove the VISUAL_MARK tags from the text
+        display_text = VISUAL_MARK_PATTERN.sub('', bot_response).strip()
+
         # --- Feature 4: Extract and send script files ---
-        scripts = extract_scripts(bot_response)
-        display_text = clean_script_tags(bot_response) if scripts else bot_response
+        scripts = extract_scripts(display_text)
+        display_text = clean_script_tags(display_text) if scripts else display_text
             
         # Try editing temporary message with HTML parsing
         try:
@@ -526,6 +645,10 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("reload", reload_command))
+    app.add_handler(CommandHandler("login", login_command))
+    app.add_handler(CommandHandler("correct", correct_command))
+    app.add_handler(CommandHandler("corrections", list_corrections_command))
+    app.add_handler(CommandHandler("del_correction", del_correction_command))
     
     # Process photos and image documents (like uncompressed screenshots)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo))
