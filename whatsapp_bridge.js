@@ -44,14 +44,7 @@ client.on('authenticated', () => {
     console.log('\n✅ הברקוד נסרק בהצלחה! כעת מסנכרן הודעות (זה עשוי לקחת כמה דקות בטלפון ראשי)...');
 });
 
-// Confirmation when successfully connected
-client.on('ready', () => {
-    console.log('\n✅ הלקוח מחובר בהצלחה לווצאפ!');
-    console.log('הבוט עכשיו מקשיב להודעות נכנסות...');
-});
-
-// Listen to incoming messages
-client.on('message', async (message) => {
+async function handleIncomingMessage(message) {
     // Only process standard text messages
     if (message.type !== 'chat') return;
     
@@ -94,15 +87,15 @@ client.on('message', async (message) => {
         chat.clearState();
         if (replyText) {
             await client.sendMessage(message.from, replyText);
-            console.log(`✅ תשובה נשלחה.`);
+            console.log(`✅ תשובה נשלחה בהצלחה.`);
             
             // Auto-archive private chats so they don't clutter the user's inbox
             if (!chat.isGroup) {
                 try {
                     await chat.archive();
-                    console.log(`📦 שיחה הועברה לארכיון.`);
+                    console.log(`🗃️ צ'אט הועבר לארכיון.`);
                 } catch (err) {
-                    console.log(`⚠️ לא ניתן היה להעביר לארכיון: ${err.message}`);
+                    console.log(`⚠️ שגיאה בהעברת הצ'אט לארכיון: ${err.message}`);
                 }
             }
         }
@@ -110,6 +103,46 @@ client.on('message', async (message) => {
         console.error('❌ שגיאה בתקשורת עם השרת של פייתון:', error.message);
         chat.clearState();
         client.sendMessage(message.from, '⚠️ מצטער, נראה שיש לי תקלה זמנית. אנא נסה שוב מאוחר יותר.');
+    }
+}
+
+// Listen to incoming messages
+client.on('message', async (message) => {
+    await handleIncomingMessage(message);
+});
+
+// Confirmation when successfully connected
+client.on('ready', async () => {
+    console.log('\n✅ הלקוח מחובר בהצלחה לווצאפ!');
+    console.log('בוט הווצאפ שלך מוכן ופועל באוויר...');
+    
+    console.log('בודק אם יש הודעות שלא נקראו בזמן שהייתי כבוי...');
+    try {
+        const chats = await client.getChats();
+        let unreadFound = false;
+        
+        for (const chat of chats) {
+            if (chat.unreadCount > 0) {
+                unreadFound = true;
+                const messages = await chat.fetchMessages({ limit: chat.unreadCount });
+                for (const msg of messages) {
+                    // Ignore messages sent by ourselves
+                    if (!msg.fromMe) {
+                        await handleIncomingMessage(msg);
+                    }
+                }
+                // Mark chat as read
+                await chat.sendSeen();
+            }
+        }
+        
+        if (!unreadFound) {
+            console.log('אין הודעות חדשות להשלים.');
+        } else {
+            console.log('סיימתי לטפל בכל ההודעות שהמתינו.');
+        }
+    } catch (err) {
+        console.error('שגיאה בסריקת הודעות שלא נקראו:', err.message);
     }
 });
 
