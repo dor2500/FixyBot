@@ -39,6 +39,11 @@ client.on('qr', (qr) => {
     });
 });
 
+// Confirmation when successfully authenticated
+client.on('authenticated', () => {
+    console.log('\n✅ הברקוד נסרק בהצלחה! כעת מסנכרן הודעות (זה עשוי לקחת כמה דקות בטלפון ראשי)...');
+});
+
 // Confirmation when successfully connected
 client.on('ready', () => {
     console.log('\n✅ הלקוח מחובר בהצלחה לווצאפ!');

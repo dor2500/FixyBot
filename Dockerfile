@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
 # Set up environment variables
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    PORT=7860 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
