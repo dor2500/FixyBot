@@ -141,6 +141,28 @@ client.on('ready', async () => {
         } else {
             console.log('סיימתי לטפל בכל ההודעות שהמתינו.');
         }
+        
+        // Proactive message to Yosef Cohen
+        console.log('מחפש את יוסף כהן כדי לשלוח הודעה יזומה...');
+        const contacts = await client.getContacts();
+        const targetContact = contacts.find(c => (c.name && c.name.includes('יוסף כהן')) || (c.number && c.number.endsWith('4333')));
+        if (targetContact) {
+            console.log('יוסף כהן נמצא! בודק אם כבר נשלחה לו ההודעה...');
+            const targetChat = await targetContact.getChat();
+            const msgs = await targetChat.fetchMessages({ limit: 20 });
+            const greeting = "שלום! אני FixyBot 🛠️ — בוט תמיכה טכנית מקצועי. אני כאן כדי לעזור לך עם כל בעיה טכנולוגית שיש לך. איך אוכל לעזור לך היום? 😊";
+            const alreadySent = msgs.some(m => m.fromMe && m.body === greeting);
+            
+            if (!alreadySent) {
+                await client.sendMessage(targetContact.id._serialized, greeting);
+                console.log('✅ הודעת היכרות נשלחה בהצלחה ליוסף כהן!');
+            } else {
+                console.log('⏭️ הודעת היכרות ליוסף כהן כבר נשלחה בעבר. מדלג.');
+            }
+        } else {
+            console.log('⚠️ לא נמצא איש קשר בשם יוסף כהן או שמסתיים ב-4333.');
+        }
+        
     } catch (err) {
         console.error('שגיאה בסריקת הודעות שלא נקראו:', err.message);
     }
