@@ -1,13 +1,13 @@
 ---
-title: FixyBot WhatsApp
+title: FixyBot Telegram
 emoji: 🚀
 colorFrom: blue
 colorTo: green
 sdk: docker
-app_port: 7860
+app_port: 10000
 ---
 
-# 🛠️ FixyBot - בוט תמיכה טכנית לווצאפ (WhatsApp)
+# 🛠️ FixyBot - בוט תמיכה טכנית לטלגרם (Telegram)
 
 בוט תמיכה טכנית חכם המבוסס על **Gemini AI** ומאגר ידע פנימי.  
 הבוט מסוגל לנתח תמונות של תקלות, לחפש פתרונות ברשת, ולענות על שאלות טכניות בעברית.

@@ -1,47 +1,25 @@
-FROM node:20-bookworm
+FROM python:3.11-slim
 
-# Install Python and Chromium
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-venv \
-    chromium \
-    libnss3 \
-    libgconf-2-4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libgdk-pixbuf2.0-0 \
-    libgtk-3-0 \
-    libgbm-dev \
-    libnss3-dev \
-    libxss-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set up environment variables
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
-    PORT=7860 \
-    PYTHONUNBUFFERED=1
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PORT=10000
 
 WORKDIR /app
 
-# Setup Python virtual environment (recommended for newer Debian versions)
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Install system dependencies if any are needed (e.g. git or curl)
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Node dependencies
-COPY package*.json ./
-RUN npm install
-
-# Copy application files
+# Copy all application files
 COPY . .
 
-# Expose the Flask port (optional, good practice)
-EXPOSE 5000
+# Expose port 10000 for Telegram webhook
+EXPOSE 10000
 
-# Run the unified start script
-CMD ["bash", "start.sh"]
+# Run the Telegram bot
+CMD ["python", "bot.py"]
