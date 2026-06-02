@@ -2,7 +2,7 @@ import os
 import re
 import json
 import logging
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from dotenv import load_dotenv
 from google.genai import types
 
@@ -130,6 +130,12 @@ def handle_chat():
 @app.route('/')
 def health_check():
     return "OK", 200
+
+@app.route('/qr')
+def serve_qr():
+    if os.path.exists('qr.png'):
+        return send_file('qr.png', mimetype='image/png')
+    return "QR code not ready yet, or already connected.", 404
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
